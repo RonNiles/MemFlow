@@ -227,6 +227,33 @@ class TestMemFlowFromEnv:
         assert manager is not None
 
     @patch("memflow.manager.LLMFactory")
+    @patch("memflow.manager.MemMachineStore")
+    @patch("memflow.manager.MemMachineBypass")
+    def test_from_env_memmachine_logging_config(
+        self, mock_bypass_cls, mock_store_cls, mock_factory, clean_env
+    ):
+        """Test MemMachine logging env vars are forwarded to store and bypass."""
+        mock_llm = MagicMock()
+        mock_factory.create.return_value = mock_llm
+
+        mock_store = MagicMock()
+        mock_store_cls.return_value = mock_store
+
+        os.environ["MEMFLOW_BACKEND"] = "memmachine"
+        os.environ["MEMMACHINE_ENABLE_LOGGING"] = "true"
+        os.environ["MEMMACHINE_LOG_LEVEL"] = "debug"
+
+        MemFlow(use_env=True)
+
+        mock_store_cls.assert_called_once()
+        assert mock_store_cls.call_args.kwargs["enable_logging"] is True
+        assert mock_store_cls.call_args.kwargs["log_level"] == "DEBUG"
+
+        mock_bypass_cls.assert_called_once()
+        assert mock_bypass_cls.call_args.kwargs["enable_logging"] is True
+        assert mock_bypass_cls.call_args.kwargs["log_level"] == "DEBUG"
+
+    @patch("memflow.manager.LLMFactory")
     @patch("memflow.manager.PgVectorStore")
     def test_from_env_with_pgvector_backend(
         self, mock_store_class, mock_factory, clean_env

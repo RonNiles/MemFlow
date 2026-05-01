@@ -165,6 +165,12 @@ def _load_env_file(env_path: str | None = None) -> None:
     load_dotenv(dotenv_path=path, override=False)
 
 
+def _parse_bool_env(value: str | None, default: bool = False) -> bool:
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 # ---------------------------------------------------------------------------
 # Guard structures for execution control
 # ---------------------------------------------------------------------------
@@ -259,6 +265,8 @@ class MemFlow:
         MEMMACHINE_ORG_ID         — MemMachine organization ID
         MEMMACHINE_PROJECT        — MemMachine project ID
         MEMMACHINE_API_KEY        — MemMachine API key (optional)
+        MEMMACHINE_ENABLE_LOGGING — Enable memmachine_client logs (true/false)
+        MEMMACHINE_LOG_LEVEL      — memmachine_client log level (DEBUG/INFO/WARN/ERROR)
 
     Note:
         When use_env=True, automatically loads .env file from current directory
@@ -326,6 +334,10 @@ class MemFlow:
         mm_org = os.getenv("MEMMACHINE_ORG_ID", "default")
         mm_proj = os.getenv("MEMMACHINE_PROJECT", "memflow")
         mm_key = os.getenv("MEMMACHINE_API_KEY")
+        mm_enable_logging = _parse_bool_env(
+            os.getenv("MEMMACHINE_ENABLE_LOGGING"), default=False
+        )
+        mm_log_level = os.getenv("MEMMACHINE_LOG_LEVEL", "INFO").upper()
 
         # PgVector Store Configuration
         pg_url = os.getenv(
@@ -344,7 +356,12 @@ class MemFlow:
                 store = FileStore(file_dir=file_dir)
             elif backend == "memmachine":
                 store = MemMachineStore(
-                    base_url=mm_url, org_id=mm_org, project_id=mm_proj, api_key=mm_key
+                    base_url=mm_url,
+                    org_id=mm_org,
+                    project_id=mm_proj,
+                    api_key=mm_key,
+                    enable_logging=mm_enable_logging,
+                    log_level=mm_log_level,
                 )
             elif backend == "pgvector":
                 store = PgVectorStore(
@@ -363,6 +380,8 @@ class MemFlow:
                 "org_id": mm_org,
                 "project_id": mm_proj,
                 "api_key": mm_key,
+                "enable_logging": mm_enable_logging,
+                "log_level": mm_log_level,
             }
             if backend == "pgvector" and store is not None:
                 bypass_kwargs["pgvector_store"] = store

@@ -110,6 +110,34 @@ def _split_file_record(text: str) -> tuple[str, str] | None:
     return None
 
 
+def _parse_bool_env(value: str | None, default: bool = False) -> bool:
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _configure_memmachine_logging(enable_logging: bool, log_level: str) -> None:
+    """Enable logging for memmachine_client.* loggers when requested."""
+    if not enable_logging:
+        return
+
+    level_name = (log_level or "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
+
+    package_logger = logging.getLogger("memmachine_client")
+    package_logger.setLevel(level)
+
+    if not package_logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s")
+        )
+        package_logger.addHandler(handler)
+
+    # Keep logs scoped to the package logger to avoid duplicate output.
+    package_logger.propagate = False
+
+
 class BaseStore(ABC):
     """Abstract base for all storage backends."""
 
@@ -443,12 +471,22 @@ class MemMachineBypass:
         org_id: str = "default",
         project_id: str = "memflow",
         api_key: str | None = None,
+        enable_logging: bool | None = None,
+        log_level: str | None = None,
         pgvector_store: "PgVectorStore | None" = None,
     ) -> None:
         self._base_url = base_url
         self._org_id = org_id
         self._project_id = project_id
         self._api_key = api_key
+        self._enable_logging = (
+            _parse_bool_env(os.getenv("MEMMACHINE_ENABLE_LOGGING"), default=False)
+            if enable_logging is None
+            else enable_logging
+        )
+        self._log_level = (
+            log_level or os.getenv("MEMMACHINE_LOG_LEVEL", "INFO")
+        ).upper()
         self._pgvector_store = pgvector_store  # for procedural memory
         self._memory: Any = None
         self._lock = threading.Lock()
@@ -458,6 +496,7 @@ class MemMachineBypass:
             return self._memory
         with self._lock:
             if self._memory is None:
+                _configure_memmachine_logging(self._enable_logging, self._log_level)
                 import memmachine_client as memmachine
 
                 kwargs: dict[str, Any] = {"base_url": self._base_url}
@@ -514,11 +553,21 @@ class MemMachineStore(BaseStore):
         org_id: str = "default",
         project_id: str = "memflow",
         api_key: str | None = None,
+        enable_logging: bool | None = None,
+        log_level: str | None = None,
     ) -> None:
         self._base_url = base_url
         self._org_id = org_id
         self._project_id = project_id
         self._api_key = api_key
+        self._enable_logging = (
+            _parse_bool_env(os.getenv("MEMMACHINE_ENABLE_LOGGING"), default=False)
+            if enable_logging is None
+            else enable_logging
+        )
+        self._log_level = (
+            log_level or os.getenv("MEMMACHINE_LOG_LEVEL", "INFO")
+        ).upper()
         self._memory: Any = None
         self._lock = threading.Lock()
         self._index: dict[str, str] = {}  # procedure.id → MemMachine episode id
@@ -528,6 +577,7 @@ class MemMachineStore(BaseStore):
             return self._memory
         with self._lock:
             if self._memory is None:
+                _configure_memmachine_logging(self._enable_logging, self._log_level)
                 import memmachine_client as memmachine
 
                 kwargs: dict[str, Any] = {"base_url": self._base_url}

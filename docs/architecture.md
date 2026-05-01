@@ -173,6 +173,8 @@ MEMMACHINE_BASE_URL=http://localhost:8080   # server URL
 MEMMACHINE_ORG_ID=default                   # tenant
 MEMMACHINE_PROJECT=memflow                  # project namespace within the org
 MEMMACHINE_API_KEY=                         # optional auth
+MEMMACHINE_ENABLE_LOGGING=false             # enable memmachine_client logs
+MEMMACHINE_LOG_LEVEL=INFO                   # DEBUG | INFO | WARNING | ERROR
 ```
 
 These vars feed both `MemMachineStore` (when backend is `memmachine`) and the auto-wired `MemMachineBypass` (when backend is `memmachine` or `pgvector`). Python dependency: `memmachine-client>=0.3.0`, installed via `uv sync --all-extras`.

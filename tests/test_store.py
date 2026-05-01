@@ -565,6 +565,21 @@ class TestMemMachineStore:
         assert procs[0].title == "Proc 1"
         assert procs[1].title == "Proc 2"
 
+    def test_logging_enabled_on_first_connection(self, memmachine_mock):
+        """Test that memmachine client logging is configured when enabled."""
+        mock_client, mock_memory, mock_module = memmachine_mock
+
+        mock_memory.search.return_value = self._search_result()
+
+        with (
+            patch.dict("sys.modules", {"memmachine_client": mock_module}),
+            patch("memflow.store._configure_memmachine_logging") as mock_configure,
+        ):
+            store = MemMachineStore(enable_logging=True, log_level="debug")
+            store.list_all()
+
+        mock_configure.assert_called_once_with(True, "DEBUG")
+
 
 class TestPgVectorStore:
     """Tests for PostgreSQL + pgvector store."""
@@ -726,3 +741,16 @@ class TestMemMachineBypass:
 
         call_args = mock_memory.add.call_args
         assert call_args[1]["metadata"]["mm_type"] == "episodic"
+
+    def test_logging_enabled_on_first_connection(self, memmachine_mock):
+        """Test that bypass configures memmachine client logging when enabled."""
+        mock_client, mock_memory, mock_module = memmachine_mock
+
+        with (
+            patch.dict("sys.modules", {"memmachine_client": mock_module}),
+            patch("memflow.store._configure_memmachine_logging") as mock_configure,
+        ):
+            bypass = MemMachineBypass(enable_logging=True, log_level="debug")
+            bypass.add("Some fact", memory_type="semantic", user_id="user1")
+
+        mock_configure.assert_called_once_with(True, "DEBUG")
