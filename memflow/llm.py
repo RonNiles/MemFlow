@@ -18,6 +18,19 @@ from __future__ import annotations
 import json
 import re
 from abc import ABC, abstractmethod
+from datetime import datetime, timezone
+from pathlib import Path
+from threading import Lock
+
+_OLLAMA_LOG_LOCK = Lock()
+
+
+def _append_ollama_log(entry: dict) -> None:
+    with _OLLAMA_LOG_LOCK:
+        log_path = Path.cwd() / "ollama_calls.log"
+        with log_path.open("a", encoding="utf-8") as logfile:
+            logfile.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            logfile.flush()
 
 
 def parse_json(text: str) -> dict:
@@ -58,8 +71,40 @@ class OllamaLLM(BaseLLM):
         self._model = model
 
     def generate(self, messages: list[dict]) -> str:
-        resp = self._client.chat(model=self._model, messages=messages)
-        return resp.message.content
+        request_entry = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "event": "request",
+            "provider": "ollama",
+            "model": self._model,
+            "messages": messages,
+        }
+        _append_ollama_log(request_entry)
+
+        try:
+            resp = self._client.chat(model=self._model, messages=messages)
+        except Exception as exc:
+            _append_ollama_log(
+                {
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "event": "error",
+                    "provider": "ollama",
+                    "model": self._model,
+                    "error": str(exc),
+                }
+            )
+            raise
+
+        response_text = resp.message.content
+        _append_ollama_log(
+            {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "event": "response",
+                "provider": "ollama",
+                "model": self._model,
+                "content": response_text,
+            }
+        )
+        return response_text
 
 
 class OpenAICompatibleLLM(BaseLLM):

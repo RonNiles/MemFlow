@@ -3,6 +3,7 @@
 
 """Unit tests for MemFlow LLM components."""
 
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -140,8 +141,9 @@ class TestLLMFactory:
 class TestOllamaLLM:
     """Tests for Ollama LLM (mocked)."""
 
-    def test_generate(self):
+    def test_generate(self, tmp_path, monkeypatch):
         """Test generating text with Ollama LLM."""
+        monkeypatch.chdir(tmp_path)
         mock_client = MagicMock()
         mock_response = MagicMock()
         mock_response.message.content = "Hello, I am an AI assistant."
@@ -161,6 +163,18 @@ class TestOllamaLLM:
             mock_client.chat.assert_called_once_with(
                 model="llama3.2", messages=[{"role": "user", "content": "Hello"}]
             )
+
+            log_path = tmp_path / "ollama_calls.log"
+            log_lines = log_path.read_text(encoding="utf-8").splitlines()
+            assert len(log_lines) == 2
+
+            request_entry = json.loads(log_lines[0])
+            response_entry = json.loads(log_lines[1])
+
+            assert request_entry["event"] == "request"
+            assert request_entry["messages"] == [{"role": "user", "content": "Hello"}]
+            assert response_entry["event"] == "response"
+            assert response_entry["content"] == "Hello, I am an AI assistant."
 
 
 class TestOpenAICompatibleLLM:
