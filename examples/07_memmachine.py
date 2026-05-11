@@ -75,110 +75,145 @@ memflow = MemFlow(store=store, bypass=bypass)
 # ---------------------------------------------------------------------------
 # 1. Store procedures (semantic vector search)
 # ---------------------------------------------------------------------------
+current_procedures = memflow.store.list_all()  # should be empty at first
+print(f"Current procedures: {current_procedures}")
+for proc in current_procedures:
+    memflow.store.delete(
+        proc.id
+    )  # belt-and-braces: clean up leftovers from prior crashed runs
 
-print("=== 1. Store Procedures ===")
+# Track every memory created in this run so the finally block can clean up.
+created_proc_ids: list[str] = []
 
-procedures = [
-    Procedure(
-        title="How to Make Coffee",
-        content=(
-            "1. Boil water.\n"
-            "2. Put coffee in a cup.\n"
-            "3. Pour hot water into the cup.\n"
-            "4. Stir and drink."
+try:
+    print("=== 1. Store Procedures ===")
+
+    procedures = [
+        Procedure(
+            title="How to Make Coffee",
+            content=(
+                "1. Boil water.\n"
+                "2. Put coffee in a cup.\n"
+                "3. Pour hot water into the cup.\n"
+                "4. Stir and drink."
+            ),
+            category="cooking",
         ),
-        category="cooking",
-    ),
-    Procedure(
-        title="How to Restart a Service",
-        content=(
-            "1. Open a terminal.\n"
-            "2. Run: sudo systemctl restart <service-name>\n"
-            "3. Check status: sudo systemctl status <service-name>\n"
-            "4. Look at logs if it fails: journalctl -u <service-name> -n 50"
+        Procedure(
+            title="How to Restart a Service",
+            content=(
+                "1. Open a terminal.\n"
+                "2. Run: sudo systemctl restart <service-name>\n"
+                "3. Check status: sudo systemctl status <service-name>\n"
+                "4. Look at logs if it fails: journalctl -u <service-name> -n 50"
+            ),
+            category="operations",
         ),
-        category="operations",
-    ),
-]
+    ]
 
-for proc in procedures:
-    memflow.add(procedure=proc)
-    print(f"  [Stored in MemMachine] {proc.title}")
+    for proc in procedures:
+        add_result = memflow.add(procedure=proc)
+        created_proc_ids.append(add_result["id"])
+        print(f"  [Stored in MemMachine] {proc.title}")
 
-print()
+    print()
 
-# ---------------------------------------------------------------------------
-# 2. Semantic search (vector similarity, not word overlap)
-# ---------------------------------------------------------------------------
+    # -----------------------------------------------------------------------
+    # 2. Semantic search (vector similarity, not word overlap)
+    # -----------------------------------------------------------------------
 
-print("=== 2. Semantic Search ===")
+    print("=== 2. Semantic Search ===")
 
-queries = [
-    "I need a hot beverage",  # similar to "coffee" by meaning
-    "the application is not responding",  # similar to "restart a service"
-]
+    queries = [
+        "I need a hot beverage",  # similar to "coffee" by meaning
+        "the application is not responding",  # similar to "restart a service"
+    ]
 
-for q in queries:
-    results = memflow.search(q, top_k=1)
-    top = results[0] if results else None
-    hit = f"score={top.score:.3f}  →  {top.procedure.title}" if top else "no match"
+    for q in queries:
+        results = memflow.search(q, top_k=1)
+        top = results[0] if results else None
+        hit = f"score={top.score:.3f}  →  {top.procedure.title}" if top else "no match"
+        print(f"  Q: {q}")
+        print(f"     {hit}")
+
+    print()
+
+    # -----------------------------------------------------------------------
+    # 3. Bypass routing for non-procedural content
+    # -----------------------------------------------------------------------
+
+    print("=== 3. Bypass Routing ===")
+
+    inputs = [
+        (
+            "procedural",
+            "How to water a plant:\n"
+            "Step 1. Check the soil — if dry, water it.\n"
+            "Step 2. Pour water slowly at the base.\n"
+            "Step 3. Stop when water drains from the bottom.",
+        ),
+        (
+            "semantic",
+            "The first law of thermodynamics states that energy cannot be created "
+            "or destroyed.",
+        ),
+        (
+            "episodic",
+            "Yesterday I ran the deployment and it failed because the config was wrong.",
+        ),
+    ]
+
+    for label, content in inputs:
+        result = memflow.add(messages=content)
+        stored = result.get("results", [])
+        skipped = result.get("skipped", "")
+        routed = result.get("routed_to", "")
+
+        # Track ids of any procedures the extraction path stored;
+        # bypass-routed content (semantic/episodic) has no caller-visible
+        # handle and is swept by bypass.delete_all() in the finally block.
+        for r in stored:
+            created_proc_ids.append(r["id"])
+
+        if stored:
+            action = f"stored in MemMachineStore → {stored[0]['title'][:40]}"
+        elif routed:
+            action = f"forwarded to MemMachineBypass (type={result.get('type')})"
+        else:
+            action = f"discarded ({skipped})"
+
+        print(f"  [{label}]")
+        print(f"    {action}")
+
+    print()
+
+    # -----------------------------------------------------------------------
+    # 4. Chat using retrieved procedures
+    # -----------------------------------------------------------------------
+
+    print("=== 4. Chat ===")
+
+    q = "How do I fix a service that stopped working?"
     print(f"  Q: {q}")
-    print(f"     {hit}")
+    before_chat = {p.id for p in memflow.store.list_all()}
+    result = memflow.chat(q)
+    after_chat = {p.id for p in memflow.store.list_all()}
+    # Capture any procedure the Learn back-edge added during chat-execute.
+    created_proc_ids.extend(after_chat - before_chat)
+    print(
+        f"  A: {result['response'][:300]}{'...' if len(result['response']) > 300 else ''}"
+    )
 
-print()
-
-# ---------------------------------------------------------------------------
-# 3. Bypass routing for non-procedural content
-# ---------------------------------------------------------------------------
-
-print("=== 3. Bypass Routing ===")
-
-inputs = [
-    (
-        "procedural",
-        "How to water a plant:\n"
-        "Step 1. Check the soil — if dry, water it.\n"
-        "Step 2. Pour water slowly at the base.\n"
-        "Step 3. Stop when water drains from the bottom.",
-    ),
-    (
-        "semantic",
-        "The first law of thermodynamics states that energy cannot be created "
-        "or destroyed.",
-    ),
-    (
-        "episodic",
-        "Yesterday I ran the deployment and it failed because the config was wrong.",
-    ),
-]
-
-for label, content in inputs:
-    result = memflow.add(messages=content)
-    stored = result.get("results", [])
-    skipped = result.get("skipped", "")
-    routed = result.get("routed_to", "")
-
-    if stored:
-        action = f"stored in MemMachineStore → {stored[0]['title'][:40]}"
-    elif routed:
-        action = f"forwarded to MemMachineBypass (type={result.get('type')})"
-    else:
-        action = f"discarded ({skipped})"
-
-    print(f"  [{label}]")
-    print(f"    {action}")
-
-print()
-
-# ---------------------------------------------------------------------------
-# 4. Chat using retrieved procedures
-# ---------------------------------------------------------------------------
-
-print("=== 4. Chat ===")
-
-q = "How do I fix a service that stopped working?"
-print(f"  Q: {q}")
-result = memflow.chat(q)
-print(
-    f"  A: {result['response'][:300]}{'...' if len(result['response']) > 300 else ''}"
-)
+finally:
+    # -----------------------------------------------------------------------
+    # Cleanup: delete everything this run created.
+    # -----------------------------------------------------------------------
+    proc_deleted = 0
+    for pid in created_proc_ids:
+        if memflow.store.delete(pid):
+            proc_deleted += 1
+    bypass_deleted = bypass.delete_all()
+    print(
+        f"\n[Cleanup] removed {proc_deleted} procedure(s) "
+        f"and {bypass_deleted} semantic/episodic episode(s)"
+    )

@@ -138,6 +138,18 @@ def _configure_memmachine_logging(enable_logging: bool, log_level: str) -> None:
     package_logger.propagate = False
 
 
+def _extract_episodes(raw: Any) -> list[Any]:
+    """Extract episodes from a MemMachine SearchResult (long-term + short-term)."""
+    episodes: list[Any] = []
+    if raw is None or raw.content is None or raw.content.episodic_memory is None:
+        return episodes
+    if raw.content.episodic_memory.long_term_memory is not None:
+        episodes.extend(raw.content.episodic_memory.long_term_memory.episodes)
+    if raw.content.episodic_memory.short_term_memory is not None:
+        episodes.extend(raw.content.episodic_memory.short_term_memory.episodes)
+    return episodes
+
+
 class BaseStore(ABC):
     """Abstract base for all storage backends."""
 
@@ -528,6 +540,45 @@ class MemMachineBypass:
             meta = {"mm_type": memory_type, "user_id": user_id}
             self._get_memory().add(content=content, metadata=meta)
 
+    def delete_all(
+        self,
+        memory_types: list[str] | None = None,
+        user_id: str | None = None,
+    ) -> int:
+        """
+        Delete every bypass-routed episode in MemMachine.
+
+        By default deletes semantic and episodic memory (everything bypass writes
+        via add()). Procedural memory is owned by MemMachineStore and is left
+        untouched. Returns the number of episodes successfully deleted.
+        """
+        if memory_types is None:
+            memory_types = ["semantic", "episodic"]
+        types_set = set(memory_types)
+        memory = self._get_memory()
+        raw = memory.search(query="", limit=10_000)
+
+        deleted = 0
+        for item in _extract_episodes(raw):
+            if isinstance(item, dict):
+                ep_id = str(item.get("uid", ""))
+                meta = item.get("metadata", {}) or {}
+            else:
+                ep_id = str(getattr(item, "uid", ""))
+                meta = getattr(item, "metadata", {}) or {}
+            if meta.get("mm_type") not in types_set:
+                continue
+            if user_id and meta.get("user_id") != user_id:
+                continue
+            if not ep_id:
+                continue
+            try:
+                memory.delete_episodic(ep_id)
+                deleted += 1
+            except Exception:
+                pass
+        return deleted
+
 
 class MemMachineStore(BaseStore):
     """
@@ -623,25 +674,14 @@ class MemMachineStore(BaseStore):
             }
         )
 
-    def _extract_episodes(self, raw: Any) -> list[Any]:
-        """Extract episodes from SearchResult (both long-term and short-term)."""
-        episodes = []
-        if raw is None or raw.content is None or raw.content.episodic_memory is None:
-            return episodes
-        if raw.content.episodic_memory.long_term_memory is not None:
-            episodes.extend(raw.content.episodic_memory.long_term_memory.episodes)
-        if raw.content.episodic_memory.short_term_memory is not None:
-            episodes.extend(raw.content.episodic_memory.short_term_memory.episodes)
-        return episodes
-
     def _parse_item(self, item: Any) -> tuple[Procedure | None, str]:
         """Parse a MemMachine search result → (Procedure | None, episode_id)."""
         if isinstance(item, dict):
-            ep_id = str(item.get("id", ""))
+            ep_id = str(item.get("uid", ""))
             content = item.get("content", "")
             meta = item.get("metadata", {}) or {}
         else:
-            ep_id = str(getattr(item, "id", ""))
+            ep_id = str(getattr(item, "uid", ""))
             content = str(getattr(item, "content", "") or "")
             meta = getattr(item, "metadata", {}) or {}
 
@@ -691,9 +731,9 @@ class MemMachineStore(BaseStore):
                     metadata=self._to_metadata(proc),
                 )
                 if isinstance(result, dict):
-                    ep_id = str(result.get("id", proc.id))
+                    ep_id = str(result.get("uid", proc.id))
                 elif result is not None:
-                    ep_id = str(getattr(result, "id", proc.id))
+                    ep_id = str(getattr(result, "uid", proc.id))
                 else:
                     ep_id = proc.id
                 self._index[proc.id] = ep_id
@@ -704,9 +744,9 @@ class MemMachineStore(BaseStore):
                 metadata=self._to_metadata(procedure),
             )
             if isinstance(result, dict):
-                ep_id = str(result.get("id", procedure.id))
+                ep_id = str(result.get("uid", procedure.id))
             elif result is not None:
-                ep_id = str(getattr(result, "id", procedure.id))
+                ep_id = str(getattr(result, "uid", procedure.id))
             else:
                 ep_id = procedure.id
             self._index[procedure.id] = ep_id
@@ -725,7 +765,7 @@ class MemMachineStore(BaseStore):
             for q in query:
                 raw = self._get_memory().search(query=q, limit=top_k * 3)
                 results = []
-                for item in self._extract_episodes(raw):
+                for item in _extract_episodes(raw):
                     score = float(item.score) if item.score is not None else 0.0
                     proc, ep_id = self._parse_item(item)
                     if proc is None:
@@ -740,7 +780,7 @@ class MemMachineStore(BaseStore):
         else:
             raw = self._get_memory().search(query=query, limit=top_k * 3)
             results = []
-            for item in self._extract_episodes(raw):
+            for item in _extract_episodes(raw):
                 score = float(item.score) if item.score is not None else 0.0
                 proc, ep_id = self._parse_item(item)
                 if proc is None:
@@ -771,7 +811,7 @@ class MemMachineStore(BaseStore):
                 if not ep_id:
                     continue
                 try:
-                    self._get_memory().delete(ep_id)
+                    self._get_memory().delete_episodic(ep_id)
                     self._index.pop(i, None)
                     num_deleted += 1
                 except Exception:
@@ -784,7 +824,7 @@ class MemMachineStore(BaseStore):
             if not ep_id:
                 return 0
             try:
-                self._get_memory().delete(ep_id)
+                self._get_memory().delete_episodic(ep_id)
                 self._index.pop(id, None)
                 return 1
             except Exception:
@@ -794,7 +834,7 @@ class MemMachineStore(BaseStore):
         raw = self._get_memory().search(query="", limit=10_000)
         procs = []
 
-        for item in self._extract_episodes(raw):
+        for item in _extract_episodes(raw):
             proc, ep_id = self._parse_item(item)
             if proc is None:
                 continue

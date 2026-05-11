@@ -316,9 +316,9 @@ class TestMemMachineStore:
     """Tests for MemMachine store (mocked)."""
 
     @staticmethod
-    def _episode(id: str, content: str, metadata: dict, score: float | None = None):
+    def _episode(uid: str, content: str, metadata: dict, score: float | None = None):
         return SimpleNamespace(
-            id=id,
+            uid=uid,
             content=content,
             metadata=metadata,
             score=score,
@@ -342,7 +342,7 @@ class TestMemMachineStore:
         # Mock search to return the procedure for get() which calls list_all()
         mock_memory.search.return_value = self._search_result(
             self._episode(
-                id="mm-episode-id",
+                uid="mm-episode-id",
                 content="# Test\n\n1. Step",
                 metadata={
                     "mm_type": "procedural",
@@ -444,7 +444,7 @@ class TestMemMachineStore:
 
         mock_memory.search.return_value = self._search_result(
             self._episode(
-                id="mm-id-1",
+                uid="mm-id-1",
                 content="# Test Procedure\n\n1. Step one",
                 metadata={
                     "mm_type": "procedural",
@@ -472,7 +472,7 @@ class TestMemMachineStore:
 
         mock_memory.search.return_value = self._search_result(
             self._episode(
-                id="mm-id-1",
+                uid="mm-id-1",
                 content="# Test",
                 metadata={"mm_type": "semantic", "record_id": "proc-id-1"},
                 score=0.9,
@@ -492,7 +492,7 @@ class TestMemMachineStore:
         # Mock list_all to return a procedure and populate the index
         mock_memory.search.return_value = self._search_result(
             self._episode(
-                id="mm-episode-id",
+                uid="mm-episode-id",
                 content="# Test\n\n1. Step",
                 metadata={
                     "mm_type": "procedural",
@@ -513,7 +513,7 @@ class TestMemMachineStore:
             result = store.delete("proc-id-123")
 
         assert result == 1
-        mock_memory.delete.assert_called_once_with("mm-episode-id")
+        mock_memory.delete_episodic.assert_called_once_with("mm-episode-id")
 
     def test_delete_not_found(self, memmachine_mock):
         """Test deleting non-existent procedure."""
@@ -532,7 +532,7 @@ class TestMemMachineStore:
 
         mock_memory.search.return_value = self._search_result(
             self._episode(
-                id="mm-id-1",
+                uid="mm-id-1",
                 content="# Proc 1\n\n1. Step",
                 metadata={
                     "mm_type": "procedural",
@@ -544,7 +544,7 @@ class TestMemMachineStore:
                 },
             ),
             self._episode(
-                id="mm-id-2",
+                uid="mm-id-2",
                 content="# Proc 2\n\n1. Step",
                 metadata={
                     "mm_type": "procedural",
@@ -718,6 +718,21 @@ class TestPgVectorStore:
 class TestMemMachineBypass:
     """Tests for MemMachine bypass bridge."""
 
+    @staticmethod
+    def _episode(uid: str, metadata: dict):
+        return SimpleNamespace(uid=uid, content="", metadata=metadata, score=None)
+
+    @staticmethod
+    def _search_result(*episodes):
+        return SimpleNamespace(
+            content=SimpleNamespace(
+                episodic_memory=SimpleNamespace(
+                    long_term_memory=SimpleNamespace(episodes=list(episodes)),
+                    short_term_memory=None,
+                )
+            )
+        )
+
     def test_add_semantic(self, memmachine_mock):
         """Test adding semantic content via bypass."""
         mock_client, mock_memory, mock_module = memmachine_mock
@@ -754,3 +769,51 @@ class TestMemMachineBypass:
             bypass.add("Some fact", memory_type="semantic", user_id="user1")
 
         mock_configure.assert_called_once_with(True, "DEBUG")
+
+    def test_delete_all_removes_semantic_and_episodic_only(self, memmachine_mock):
+        """delete_all() removes semantic + episodic episodes but leaves procedural."""
+        mock_client, mock_memory, mock_module = memmachine_mock
+        mock_memory.search.return_value = self._search_result(
+            self._episode(uid="ep-sem", metadata={"mm_type": "semantic"}),
+            self._episode(uid="ep-epi", metadata={"mm_type": "episodic"}),
+            self._episode(uid="ep-proc", metadata={"mm_type": "procedural"}),
+        )
+
+        with patch.dict("sys.modules", {"memmachine_client": mock_module}):
+            bypass = MemMachineBypass()
+            deleted = bypass.delete_all()
+
+        assert deleted == 2
+        deleted_ids = {
+            call.args[0] for call in mock_memory.delete_episodic.call_args_list
+        }
+        assert deleted_ids == {"ep-sem", "ep-epi"}
+        assert "ep-proc" not in deleted_ids
+
+    def test_delete_all_with_memory_types_filter(self, memmachine_mock):
+        """memory_types= limits which episode classes are deleted."""
+        mock_client, mock_memory, mock_module = memmachine_mock
+        mock_memory.search.return_value = self._search_result(
+            self._episode(uid="ep-sem", metadata={"mm_type": "semantic"}),
+            self._episode(uid="ep-epi", metadata={"mm_type": "episodic"}),
+            self._episode(uid="ep-proc", metadata={"mm_type": "procedural"}),
+        )
+
+        with patch.dict("sys.modules", {"memmachine_client": mock_module}):
+            bypass = MemMachineBypass()
+            deleted = bypass.delete_all(memory_types=["semantic"])
+
+        assert deleted == 1
+        mock_memory.delete_episodic.assert_called_once_with("ep-sem")
+
+    def test_delete_all_empty_store(self, memmachine_mock):
+        """delete_all() on an empty store returns 0 and calls nothing."""
+        mock_client, mock_memory, mock_module = memmachine_mock
+        mock_memory.search.return_value = self._search_result()
+
+        with patch.dict("sys.modules", {"memmachine_client": mock_module}):
+            bypass = MemMachineBypass()
+            deleted = bypass.delete_all()
+
+        assert deleted == 0
+        mock_memory.delete_episodic.assert_not_called()
