@@ -723,13 +723,23 @@ class TestMemMachineBypass:
         return SimpleNamespace(uid=uid, content="", metadata=metadata, score=None)
 
     @staticmethod
-    def _search_result(*episodes):
+    def _feature(sem_id: str, user_id: str | None = None):
+        other: dict[str, str] = {}
+        if user_id is not None:
+            other["user_id"] = user_id
+        return SimpleNamespace(
+            metadata=SimpleNamespace(id=sem_id, citations=[], other=other),
+        )
+
+    @staticmethod
+    def _search_result(*episodes, semantic_features=()):
         return SimpleNamespace(
             content=SimpleNamespace(
                 episodic_memory=SimpleNamespace(
                     long_term_memory=SimpleNamespace(episodes=list(episodes)),
                     short_term_memory=None,
-                )
+                ),
+                semantic_memory=list(semantic_features) if semantic_features else None,
             )
         )
 
@@ -817,3 +827,43 @@ class TestMemMachineBypass:
 
         assert deleted == 0
         mock_memory.delete_episodic.assert_not_called()
+        mock_memory.delete_semantic.assert_not_called()
+
+    def test_delete_all_deletes_semantic_features(self, memmachine_mock):
+        """delete_all() sweeps derived semantic features via delete_semantic."""
+        mock_client, mock_memory, mock_module = memmachine_mock
+        mock_memory.search.return_value = self._search_result(
+            self._episode(uid="ep-sem", metadata={"mm_type": "semantic"}),
+            semantic_features=(
+                self._feature("sem-1"),
+                self._feature("sem-2"),
+            ),
+        )
+
+        with patch.dict("sys.modules", {"memmachine_client": mock_module}):
+            bypass = MemMachineBypass()
+            deleted = bypass.delete_all()
+
+        # 1 episode + 2 semantic features = 3 deletions
+        assert deleted == 3
+        mock_memory.delete_episodic.assert_called_once_with("ep-sem")
+        deleted_sem_ids = {
+            call.args[0] for call in mock_memory.delete_semantic.call_args_list
+        }
+        assert deleted_sem_ids == {"sem-1", "sem-2"}
+
+    def test_delete_all_skips_semantic_when_filtered_out(self, memmachine_mock):
+        """memory_types=['episodic'] leaves semantic features untouched."""
+        mock_client, mock_memory, mock_module = memmachine_mock
+        mock_memory.search.return_value = self._search_result(
+            self._episode(uid="ep-epi", metadata={"mm_type": "episodic"}),
+            semantic_features=(self._feature("sem-1"),),
+        )
+
+        with patch.dict("sys.modules", {"memmachine_client": mock_module}):
+            bypass = MemMachineBypass()
+            deleted = bypass.delete_all(memory_types=["episodic"])
+
+        assert deleted == 1
+        mock_memory.delete_episodic.assert_called_once_with("ep-epi")
+        mock_memory.delete_semantic.assert_not_called()

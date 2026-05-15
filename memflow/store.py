@@ -150,6 +150,16 @@ def _extract_episodes(raw: Any) -> list[Any]:
     return episodes
 
 
+def _extract_semantic_features(raw: Any) -> list[Any]:
+    """Extract semantic features from a MemMachine SearchResult."""
+    if raw is None or raw.content is None:
+        return []
+    sem = getattr(raw.content, "semantic_memory", None)
+    if sem is None:
+        return []
+    return list(sem)
+
+
 class BaseStore(ABC):
     """Abstract base for all storage backends."""
 
@@ -546,11 +556,16 @@ class MemMachineBypass:
         user_id: str | None = None,
     ) -> int:
         """
-        Delete every bypass-routed episode in MemMachine.
+        Delete every bypass-routed memory in MemMachine.
 
         By default deletes semantic and episodic memory (everything bypass writes
         via add()). Procedural memory is owned by MemMachineStore and is left
-        untouched. Returns the number of episodes successfully deleted.
+        untouched. Returns the number of memories successfully deleted.
+
+        MemMachine auto-derives semantic features from every episode bypass
+        adds, so we sweep both the source episodes (via delete_episodic) and
+        the derived features (via delete_semantic). The "semantic" /
+        "episodic" entries in memory_types control each leg independently.
         """
         if memory_types is None:
             memory_types = ["semantic", "episodic"]
@@ -559,6 +574,8 @@ class MemMachineBypass:
         raw = memory.search(query="", limit=10_000)
 
         deleted = 0
+
+        # Episode sweep: filter on the mm_type tag we set in add().
         for item in _extract_episodes(raw):
             if isinstance(item, dict):
                 ep_id = str(item.get("uid", ""))
@@ -577,6 +594,37 @@ class MemMachineBypass:
                 deleted += 1
             except Exception:
                 pass
+
+        # Semantic-feature sweep: features are derived (no mm_type tag of
+        # their own), so when "semantic" is requested we delete every feature
+        # the search returned. user_id is matched against metadata.other when
+        # MemMachine surfaces it there.
+        if "semantic" in types_set:
+            for feat in _extract_semantic_features(raw):
+                if isinstance(feat, dict):
+                    feat_meta = feat.get("metadata", {}) or {}
+                else:
+                    feat_meta = getattr(feat, "metadata", None) or {}
+                if isinstance(feat_meta, dict):
+                    sem_id = str(feat_meta.get("id", ""))
+                    other = feat_meta.get("other") or {}
+                else:
+                    sem_id = str(getattr(feat_meta, "id", ""))
+                    other = getattr(feat_meta, "other", None) or {}
+                if user_id:
+                    other_uid = (
+                        other.get("user_id") if isinstance(other, dict) else None
+                    )
+                    if other_uid != user_id:
+                        continue
+                if not sem_id:
+                    continue
+                try:
+                    memory.delete_semantic(sem_id)
+                    deleted += 1
+                except Exception:
+                    pass
+
         return deleted
 
 
