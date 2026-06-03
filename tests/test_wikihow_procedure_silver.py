@@ -119,6 +119,13 @@ class FakeStore:
 
         return await asyncio.to_thread(self.search, query, top_k, user_id, kind)
 
+    def iter_ids(self, user_id: str | None = None):
+        # Mirror BaseStore's default iter_ids() so seed_wikihow_corpus can
+        # stream existing IDs without each FakeStore needing its own override.
+        for proc in self.list_all(user_id=user_id):
+            if proc.id:
+                yield proc.id
+
     def delete(
         self,
         id: str | list[str],
@@ -467,6 +474,90 @@ def test_seed_wikihow_corpus_reuses_existing_and_seeds_missing(tmp_path) -> None
     assert stats.num_reused == 1
     assert stats.num_skipped == 0
     assert stats.active_corpus_size == 2
+
+
+def test_seed_wikihow_corpus_resume_progress_prints_overlap(tmp_path, capsys) -> None:
+    """--resume-progress prints how many corpus IDs are already in the store."""
+    corpus_path = tmp_path / "wikihow_procedures.jsonl"
+    _write_jsonl(
+        corpus_path,
+        [
+            {
+                "id": "wh_001",
+                "title": "How to Brew Tea",
+                "content": "1. Heat water\n2. Steep leaves",
+                "category": "Food and Entertaining",
+            },
+            {
+                "id": "wh_002",
+                "title": "How to Repair a Zipper",
+                "content": "1. Inspect slider\n2. Realign teeth",
+                "category": "Clothing",
+            },
+            {
+                "id": "wh_003",
+                "title": "How to Boil an Egg",
+                "content": "1. Heat water\n2. Add egg",
+                "category": "Food and Entertaining",
+            },
+        ],
+    )
+    memflow = FakeMemFlow(
+        existing=[
+            Procedure(
+                id="wh_001",
+                title="Existing Tea",
+                content="old",
+                user_id="bench-user",
+            ),
+            # wh_002 belongs to a different user → must not count as overlap.
+            Procedure(
+                id="wh_002",
+                title="Other-user Zipper",
+                content="old",
+                user_id="other-user",
+            ),
+        ]
+    )
+
+    stats = seed_wikihow_corpus(
+        memflow=memflow,
+        user_id="bench-user",
+        corpus_path=corpus_path,
+        resume_progress=True,
+    )
+
+    output = capsys.readouterr().out
+    assert "Resume status: 1 / 3 corpus procedures already in store" in output
+    assert "2 to seed" in output
+    # Sanity check that the stats still reflect the actual seeding work.
+    assert stats.num_reused == 1
+    assert stats.num_seeded == 2
+
+
+def test_seed_wikihow_corpus_resume_progress_default_off(tmp_path, capsys) -> None:
+    """Without --resume-progress, no resume-status line appears."""
+    corpus_path = tmp_path / "wikihow_procedures.jsonl"
+    _write_jsonl(
+        corpus_path,
+        [
+            {
+                "id": "wh_001",
+                "title": "How to Brew Tea",
+                "content": "1. Heat water\n2. Steep leaves",
+                "category": "Food and Entertaining",
+            },
+        ],
+    )
+    memflow = FakeMemFlow()
+
+    seed_wikihow_corpus(
+        memflow=memflow,
+        user_id="bench-user",
+        corpus_path=corpus_path,
+    )
+
+    assert "Resume status:" not in capsys.readouterr().out
 
 
 def test_seed_wikihow_corpus_raises_when_reuse_listing_fails(tmp_path) -> None:

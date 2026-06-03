@@ -22,7 +22,7 @@ import uuid
 from abc import ABC, abstractmethod
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 import httpx
 
@@ -214,6 +214,18 @@ class BaseStore(ABC):
         raise NotImplementedError(
             "Async operations are only supported by PgVectorStore"
         )
+
+    def iter_ids(self, user_id: str | None = None) -> Iterator[str]:
+        """
+        Stream procedure IDs without materializing full Procedure objects.
+
+        Default falls back to list_all(); MemMachineStore overrides this with
+        a paginated v2 list call so resume on very large corpora avoids the
+        single-shot ~10k cap on search().
+        """
+        for proc in self.list_all(user_id=user_id):
+            if proc.id:
+                yield proc.id
 
 
 class EmulatedStore(BaseStore):
@@ -892,6 +904,59 @@ class MemMachineStore(BaseStore):
                 continue
             procs.append(proc)
         return procs
+
+    def iter_ids(
+        self,
+        user_id: str | None = None,
+        page_size: int = 500,
+    ) -> Iterator[str]:
+        """
+        Stream procedure IDs via the paginated v2 list API.
+
+        Filters are pushed to the server (`metadata.mm_type='procedural'` and,
+        when given, `metadata.user_id=<...>`) so cross-user and bypass-routed
+        rows never leave MemMachine. Pagination loops until a page returns no
+        episodic_memory entries, dodging the ~10k cap that single-shot search
+        hits on large corpora. As a side effect, populates the in-memory
+        ep_id index so a later delete() doesn't need a separate list_all().
+        """
+        # Import lazily so non-MemMachine paths don't require memmachine_common.
+        from memmachine_common.api import MemoryType
+
+        memory = self._get_memory()
+
+        filter_dict: dict[str, str] = {"metadata.mm_type": self._MM_TYPE}
+        if user_id:
+            filter_dict["metadata.user_id"] = user_id
+
+        page_num = 0
+        while True:
+            result = memory.list(
+                memory_type=MemoryType.Episodic,
+                page_size=page_size,
+                page_num=page_num,
+                filter_dict=filter_dict,
+            )
+            content = getattr(result, "content", None)
+            episodes = getattr(content, "episodic_memory", None) if content else None
+            if not episodes:
+                return
+            for item in episodes:
+                if isinstance(item, dict):
+                    ep_id = str(item.get("uid", ""))
+                    meta = item.get("metadata", {}) or {}
+                else:
+                    ep_id = str(getattr(item, "uid", ""))
+                    meta = getattr(item, "metadata", {}) or {}
+                record_id = str(meta.get("record_id") or "") if meta else ""
+                if not record_id:
+                    continue
+                if ep_id:
+                    self._index[record_id] = ep_id
+                yield record_id
+            if len(episodes) < page_size:
+                return
+            page_num += 1
 
 
 class PgVectorStore(BaseStore):

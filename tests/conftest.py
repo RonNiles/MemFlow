@@ -3,7 +3,9 @@
 
 """Shared fixtures for unit tests."""
 
+import enum
 import os
+import types
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -83,6 +85,13 @@ def clean_env():
             os.environ.pop(k, None)
 
 
+class _FakeMemoryType(enum.Enum):
+    """Stand-in for memmachine_common.api.MemoryType in tests."""
+
+    Episodic = "episodic"
+    Semantic = "semantic"
+
+
 @pytest.fixture
 def memmachine_mock():
     """Mock memmachine_client module for MemMachineStore and MemMachineBypass tests."""
@@ -94,7 +103,20 @@ def memmachine_mock():
     mock_module = MagicMock()
     mock_module.MemMachineClient.return_value = mock_client
 
-    yield mock_client, mock_memory, mock_module
+    # iter_ids() and its tests lazily `from memmachine_common.api import MemoryType`.
+    # The real package only ships with the `--all-extras` install, so CI (which runs
+    # `uv sync --dev`) lacks it. Inject a fake so the import resolves everywhere and
+    # MemoryType.Episodic keeps a stable identity for equality assertions.
+    api_module = types.ModuleType("memmachine_common.api")
+    api_module.MemoryType = _FakeMemoryType
+    common_module = types.ModuleType("memmachine_common")
+    common_module.api = api_module
+
+    with patch.dict(
+        "sys.modules",
+        {"memmachine_common": common_module, "memmachine_common.api": api_module},
+    ):
+        yield mock_client, mock_memory, mock_module
 
 
 @pytest.fixture

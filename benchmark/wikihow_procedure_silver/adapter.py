@@ -127,15 +127,38 @@ def _collect_corpus_ids(corpus_path: str | Path) -> set[str]:
 
 
 def _collect_existing_procedure_ids(memflow: MemFlow, user_id: str) -> set[str]:
+    """
+    Stream existing procedure IDs for `user_id` via the store's iter_ids().
+
+    On MemMachine this paginates the v2 list endpoint with server-side
+    metadata filters, so resuming after a partial seed scales to corpora
+    far larger than search()'s ~10k single-shot cap. Other backends fall
+    back to the default iter_ids() (list_all under the hood).
+    """
+    existing: set[str] = set()
+    last_logged = 0
     try:
-        return {proc.id for proc in memflow.store.list_all(user_id=user_id) if proc.id}
+        for pid in memflow.store.iter_ids(user_id=user_id):
+            if not pid:
+                continue
+            existing.add(pid)
+            if len(existing) - last_logged >= 5000:
+                last_logged = len(existing)
+                print(
+                    f"\r  Found {len(existing)} existing procedure IDs...",
+                    end="",
+                    flush=True,
+                )
     except Exception as exc:
         raise RuntimeError(
             "Failed to list existing procedures before WikiHow corpus reuse for "
             f"user_id={user_id!r}; refusing to seed because duplicate corpus IDs "
-            "could be created. Resolve the list_all error before rerunning; use "
+            "could be created. Resolve the iter_ids error before rerunning; use "
             "--clear-existing only for an intentional fresh reseed."
         ) from exc
+    if last_logged:
+        print()  # finish the carriage-return line
+    return existing
 
 
 def seed_wikihow_corpus(
@@ -144,10 +167,15 @@ def seed_wikihow_corpus(
     corpus_path: str | Path,
     clear_existing: bool = False,
     batch_size: int = 100,
+    resume_progress: bool = False,
 ) -> CorpusSeedStats:
     """Seed WikiHow procedures into MemFlow using batch embedding.
 
     Uses memflow.add() with list for efficient batch processing.
+
+    When resume_progress=True and clear_existing=False, performs an extra pass
+    over the corpus JSONL after collecting existing IDs to print how many
+    corpus procedures are already in the store vs. how many remain to ingest.
 
     Args:
         memflow: MemFlow instance
@@ -155,6 +183,7 @@ def seed_wikihow_corpus(
         corpus_path: Path to JSONL corpus file
         clear_existing: Whether to clear existing procedures first
         batch_size: Number of procedures to add in each batch
+        resume_progress: Print resume status (existing vs. remaining) before seeding
     """
     corpus_path = Path(corpus_path)
     if not corpus_path.exists():
@@ -179,6 +208,16 @@ def seed_wikihow_corpus(
     else:
         existing_ids = _collect_existing_procedure_ids(memflow, user_id=user_id)
         print(f"Reusing existing procedures by ID ({len(existing_ids)} available)")
+        if resume_progress:
+            corpus_ids = _collect_corpus_ids(corpus_path)
+            already = len(corpus_ids & existing_ids)
+            missing = len(corpus_ids) - already
+            pct = (100.0 * already / len(corpus_ids)) if corpus_ids else 0.0
+            print(
+                f"  Resume status: {already} / {len(corpus_ids)} corpus "
+                f"procedures already in store ({pct:.1f}%); "
+                f"{missing} to seed."
+            )
 
     categories: Counter[str] = Counter()
     print("Streaming procedures from JSONL...")

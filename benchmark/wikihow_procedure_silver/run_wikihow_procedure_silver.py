@@ -88,6 +88,16 @@ def _parse_args() -> argparse.Namespace:
         type=int,
         help="Evaluate only the first N query-bank records for smoke tests.",
     )
+    parser.add_argument(
+        "--resume-progress",
+        action="store_true",
+        help=(
+            "Before seeding, scan the corpus and print how many corpus "
+            "procedures are already in the store vs. how many remain to be "
+            "added. Useful for resuming a long ingestion. No effect with "
+            "--clear-existing."
+        ),
+    )
     args = parser.parse_args()
     if not args.seed_only and not args.query_bank_path:
         parser.error("--query-bank-path is required unless --seed-only is set")
@@ -179,6 +189,7 @@ def main() -> None:
         user_id=args.user_id,
         corpus_path=args.corpus_path,
         clear_existing=args.clear_existing,
+        resume_progress=args.resume_progress,
     )
     corpus_size = seed_stats.active_corpus_size
 
@@ -204,6 +215,7 @@ def main() -> None:
                 "results_filename": args.results_filename,
                 "seed_only": args.seed_only,
                 "clear_existing": args.clear_existing,
+                "resume_progress": args.resume_progress,
                 "backend": backend,
                 "llm_provider": llm_provider,
                 "llm_model": llm_model,
@@ -274,6 +286,7 @@ def main() -> None:
             "results_filename": args.results_filename,
             "seed_only": args.seed_only,
             "clear_existing": args.clear_existing,
+            "resume_progress": args.resume_progress,
             "max_queries": args.max_queries,
             "source_holdout_policy": "per_query_source_procedure_id",
             "backend": backend,

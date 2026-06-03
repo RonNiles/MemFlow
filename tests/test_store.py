@@ -142,6 +142,17 @@ class TestEmulatedStore:
         assert all(len(batch) == 1 for batch in results)
         assert all(batch[0].procedure.kind == "procedure" for batch in results)
 
+    def test_iter_ids_default_fallback(self):
+        """Default BaseStore.iter_ids yields procedure IDs and honors user_id."""
+        store = EmulatedStore()
+        a = Procedure(title="A", content="x", user_id="u1")
+        b = Procedure(title="B", content="x", user_id="u2")
+        store.add(a)
+        store.add(b)
+
+        assert set(store.iter_ids()) == {a.id, b.id}
+        assert set(store.iter_ids(user_id="u1")) == {a.id}
+
 
 class TestFileStore:
     """Tests for file-based store."""
@@ -579,6 +590,80 @@ class TestMemMachineStore:
             store.list_all()
 
         mock_configure.assert_called_once_with(True, "DEBUG")
+
+    @staticmethod
+    def _list_episode(uid: str, record_id: str):
+        return SimpleNamespace(
+            uid=uid,
+            metadata={"mm_type": "procedural", "record_id": record_id},
+        )
+
+    @staticmethod
+    def _list_result(*episodes):
+        return SimpleNamespace(
+            content=SimpleNamespace(episodic_memory=list(episodes)),
+        )
+
+    def test_iter_ids_paginates_until_short_page(self, memmachine_mock):
+        """iter_ids() paginates and stops when a page comes back shorter than page_size."""
+        from memmachine_common.api import MemoryType
+
+        mock_client, mock_memory, mock_module = memmachine_mock
+        mock_memory.list.side_effect = [
+            self._list_result(
+                self._list_episode("ep-1", "rec-1"),
+                self._list_episode("ep-2", "rec-2"),
+            ),
+            self._list_result(self._list_episode("ep-3", "rec-3")),
+        ]
+
+        with patch.dict("sys.modules", {"memmachine_client": mock_module}):
+            store = MemMachineStore()
+            ids = list(store.iter_ids(user_id="benchmark", page_size=2))
+
+        assert ids == ["rec-1", "rec-2", "rec-3"]
+        assert mock_memory.list.call_count == 2
+        first_call = mock_memory.list.call_args_list[0]
+        assert first_call.kwargs["memory_type"] == MemoryType.Episodic
+        assert first_call.kwargs["page_size"] == 2
+        assert first_call.kwargs["page_num"] == 0
+        assert first_call.kwargs["filter_dict"] == {
+            "metadata.mm_type": "procedural",
+            "metadata.user_id": "benchmark",
+        }
+        second_call = mock_memory.list.call_args_list[1]
+        assert second_call.kwargs["page_num"] == 1
+
+    def test_iter_ids_stops_on_empty_first_page(self, memmachine_mock):
+        """iter_ids() returns immediately when the first page is empty."""
+        mock_client, mock_memory, mock_module = memmachine_mock
+        mock_memory.list.return_value = self._list_result()
+
+        with patch.dict("sys.modules", {"memmachine_client": mock_module}):
+            store = MemMachineStore()
+            ids = list(store.iter_ids())
+
+        assert ids == []
+        mock_memory.list.assert_called_once()
+        # No user_id → only the mm_type filter is sent.
+        assert mock_memory.list.call_args.kwargs["filter_dict"] == {
+            "metadata.mm_type": "procedural",
+        }
+
+    def test_iter_ids_populates_delete_index(self, memmachine_mock):
+        """Streaming iter_ids primes the in-memory index so delete() doesn't list_all() again."""
+        mock_client, mock_memory, mock_module = memmachine_mock
+        mock_memory.list.return_value = self._list_result(
+            self._list_episode("ep-keep", "rec-keep"),
+        )
+
+        with patch.dict("sys.modules", {"memmachine_client": mock_module}):
+            store = MemMachineStore()
+            list(store.iter_ids(user_id="benchmark"))
+            store.delete("rec-keep")
+
+        mock_memory.delete_episodic.assert_called_once_with("ep-keep")
+        mock_memory.search.assert_not_called()  # delete should NOT fall back to list_all()
 
 
 class TestPgVectorStore:
