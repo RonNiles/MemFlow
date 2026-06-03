@@ -731,6 +731,31 @@ def test_wikihow_loader_and_conversion_preserve_procedure_fields(tmp_path) -> No
     assert stats.category_counts == {"Food and Entertaining": 1}
 
 
+def test_wikihow_record_to_procedure_uses_corpus_time_for_created_at() -> None:
+    procedure = wikihow_record_to_procedure(
+        {
+            "id": "wh_time",
+            "title": "How to Tell Time",
+            "content": "1. Look at a clock",
+            "metadata": {"time": 1576560960525},
+        },
+        user_id="bench-user",
+    )
+    assert procedure.created_at == "2019-12-17T05:36:00.525000+00:00"
+
+    for metadata in ({}, {"time": "not-a-number"}):
+        fallback = wikihow_record_to_procedure(
+            {
+                "id": "wh_no_time",
+                "title": "No Time",
+                "content": "1. Step",
+                "metadata": metadata,
+            },
+            user_id="bench-user",
+        )
+        assert fallback.created_at  # default instantiation timestamp
+
+
 def test_wikihow_adapter_excludes_query_source_and_refills_top_k() -> None:
     source_proc = Procedure(
         id="source_a",

@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 from collections import Counter
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -111,6 +112,13 @@ def wikihow_record_to_procedure(
     normalized = (
         normalize_wikihow_record(record) if isinstance(record, dict) else record
     )
+    kwargs: dict[str, Any] = {}
+    time_ms = normalized.metadata.get("time")
+    if isinstance(time_ms, (int, float)):
+        # Deterministic timestamp from the corpus (Unix milliseconds, UTC).
+        kwargs["created_at"] = datetime.fromtimestamp(
+            time_ms / 1000, tz=timezone.utc
+        ).isoformat()
     return Procedure(
         id=normalized.id,
         title=normalized.title,
@@ -119,6 +127,7 @@ def wikihow_record_to_procedure(
         category=normalized.category,
         tags=list(normalized.tags),
         kind="procedure",
+        **kwargs,
     )
 
 

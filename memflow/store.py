@@ -21,6 +21,7 @@ import threading
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -786,9 +787,16 @@ class MemMachineStore(BaseStore):
     ) -> int:
         if isinstance(procedure, list):
             for proc in procedure:
+                timestamp = None
+                if proc.created_at:
+                    try:
+                        timestamp = datetime.fromisoformat(proc.created_at)
+                    except ValueError:
+                        pass  # malformed created_at → let server stamp it
                 result = self._get_memory().add(
                     content=self._to_text(proc),
                     metadata=self._to_metadata(proc),
+                    timestamp=timestamp,
                 )
                 if isinstance(result, dict):
                     ep_id = str(result.get("uid", proc.id))
@@ -799,9 +807,16 @@ class MemMachineStore(BaseStore):
                 self._index[proc.id] = ep_id
             return len(procedure)
         else:
+            timestamp = None
+            if procedure.created_at:
+                try:
+                    timestamp = datetime.fromisoformat(procedure.created_at)
+                except ValueError:
+                    pass  # malformed created_at → let server stamp it
             result = self._get_memory().add(
                 content=self._to_text(procedure),
                 metadata=self._to_metadata(procedure),
+                timestamp=timestamp,
             )
             if isinstance(result, dict):
                 ep_id = str(result.get("uid", procedure.id))

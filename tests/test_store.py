@@ -7,6 +7,7 @@ import logging
 import os
 import shutil
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -375,6 +376,10 @@ class TestMemMachineStore:
         metadata = mock_memory.add.call_args.kwargs["metadata"]
         assert metadata["kind"] == "skill"
         assert metadata["metadata"] == "{}"
+        # Episode timestamp is deterministic: derived from created_at
+        assert mock_memory.add.call_args.kwargs["timestamp"] == datetime.fromisoformat(
+            proc.created_at
+        )
         # Verify procedure can be retrieved (indirectly confirms index population)
         retrieved = store.get("proc-id-123")
         assert retrieved is not None
@@ -448,6 +453,20 @@ class TestMemMachineStore:
 
         assert len(results) == 1
         assert results[0].procedure.id == "procedure-id"
+
+    @pytest.mark.parametrize("created_at", ["", "not-a-timestamp"])
+    def test_add_unparseable_created_at_omits_timestamp(
+        self, memmachine_mock, created_at
+    ):
+        """Empty/malformed created_at → timestamp=None (server stamps it)."""
+        mock_client, mock_memory, mock_module = memmachine_mock
+
+        with patch.dict("sys.modules", {"memmachine_client": mock_module}):
+            store = MemMachineStore()
+            proc = Procedure(title="Test", content="1. Step", created_at=created_at)
+            store.add(proc)
+
+        assert mock_memory.add.call_args.kwargs["timestamp"] is None
 
     def test_search(self, memmachine_mock):
         """Test searching procedures."""
