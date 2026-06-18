@@ -7,6 +7,7 @@ import json
 from collections import Counter
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+from itertools import islice
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -131,8 +132,11 @@ def wikihow_record_to_procedure(
     )
 
 
-def _collect_corpus_ids(corpus_path: str | Path) -> set[str]:
-    return {record.id for record in iter_wikihow_procedures(corpus_path) if record.id}
+def _collect_corpus_ids(corpus_path: str | Path, limit: int | None = None) -> set[str]:
+    records = iter_wikihow_procedures(corpus_path)
+    if limit is not None:
+        records = islice(records, limit)
+    return {record.id for record in records if record.id}
 
 
 def _collect_existing_procedure_ids(memflow: MemFlow, user_id: str) -> set[str]:
@@ -177,6 +181,7 @@ def seed_wikihow_corpus(
     clear_existing: bool = False,
     batch_size: int = 100,
     resume_progress: bool = False,
+    limit: int | None = None,
 ) -> CorpusSeedStats:
     """Seed WikiHow procedures into MemFlow using batch embedding.
 
@@ -186,6 +191,9 @@ def seed_wikihow_corpus(
     over the corpus JSONL after collecting existing IDs to print how many
     corpus procedures are already in the store vs. how many remain to ingest.
 
+    When limit is set, only the first ``limit`` corpus records are considered
+    (for smoke tests); clearing and resume accounting are scoped to that slice.
+
     Args:
         memflow: MemFlow instance
         user_id: User ID for procedures
@@ -193,6 +201,7 @@ def seed_wikihow_corpus(
         clear_existing: Whether to clear existing procedures first
         batch_size: Number of procedures to add in each batch
         resume_progress: Print resume status (existing vs. remaining) before seeding
+        limit: If set, only process the first ``limit`` corpus records
     """
     corpus_path = Path(corpus_path)
     if not corpus_path.exists():
@@ -204,11 +213,13 @@ def seed_wikihow_corpus(
     )
 
     print("\n=== Seeding WikiHow Procedure Silver Corpus ===")
+    if limit is not None:
+        print(f"Limiting to the first {limit} corpus records")
 
     existing_ids: set[str] = set()
     if clear_existing:
         print("Clearing existing WikiHow procedures...")
-        corpus_ids = _collect_corpus_ids(corpus_path)
+        corpus_ids = _collect_corpus_ids(corpus_path, limit=limit)
         for proc in memflow.store.list_all(user_id=user_id):
             if proc.id in corpus_ids:
                 memflow.store.delete(proc.id)
@@ -218,7 +229,7 @@ def seed_wikihow_corpus(
         existing_ids = _collect_existing_procedure_ids(memflow, user_id=user_id)
         print(f"Reusing existing procedures by ID ({len(existing_ids)} available)")
         if resume_progress:
-            corpus_ids = _collect_corpus_ids(corpus_path)
+            corpus_ids = _collect_corpus_ids(corpus_path, limit=limit)
             already = len(corpus_ids & existing_ids)
             missing = len(corpus_ids) - already
             pct = (100.0 * already / len(corpus_ids)) if corpus_ids else 0.0
@@ -233,7 +244,10 @@ def seed_wikihow_corpus(
 
     # Collect procedures to seed
     procedures_to_seed: list[Procedure] = []
-    for record in iter_wikihow_procedures(corpus_path):
+    records = iter_wikihow_procedures(corpus_path)
+    if limit is not None:
+        records = islice(records, limit)
+    for record in records:
         stats.num_records += 1
         if not record.id:
             stats.num_skipped += 1

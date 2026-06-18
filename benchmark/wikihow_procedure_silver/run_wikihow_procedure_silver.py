@@ -89,6 +89,11 @@ def _parse_args() -> argparse.Namespace:
         help="Evaluate only the first N query-bank records for smoke tests.",
     )
     parser.add_argument(
+        "--limit",
+        type=int,
+        help="Seed only the first N records of the corpus (smoke tests).",
+    )
+    parser.add_argument(
         "--resume-progress",
         action="store_true",
         help=(
@@ -101,6 +106,8 @@ def _parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if not args.seed_only and not args.query_bank_path:
         parser.error("--query-bank-path is required unless --seed-only is set")
+    if args.limit is not None and args.limit <= 0:
+        parser.error("--limit must be a positive integer")
     return args
 
 
@@ -190,6 +197,7 @@ def main() -> None:
         corpus_path=args.corpus_path,
         clear_existing=args.clear_existing,
         resume_progress=args.resume_progress,
+        limit=args.limit,
     )
     corpus_size = seed_stats.active_corpus_size
 

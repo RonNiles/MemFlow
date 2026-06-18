@@ -476,6 +476,62 @@ def test_seed_wikihow_corpus_reuses_existing_and_seeds_missing(tmp_path) -> None
     assert stats.active_corpus_size == 2
 
 
+def test_seed_wikihow_corpus_limit_seeds_only_first_n_records(tmp_path) -> None:
+    corpus_path = tmp_path / "wikihow_procedures.jsonl"
+    _write_jsonl(
+        corpus_path,
+        [
+            {"id": f"wh_{i:03d}", "title": f"Task {i}", "content": "1. Step"}
+            for i in range(5)
+        ],
+    )
+    memflow = FakeMemFlow()
+
+    stats = seed_wikihow_corpus(
+        memflow=memflow,
+        user_id="bench-user",
+        corpus_path=corpus_path,
+        limit=2,
+    )
+
+    assert [proc.id for proc in memflow.added] == ["wh_000", "wh_001"]
+    assert stats.num_records == 2
+    assert stats.num_seeded == 2
+
+
+def test_seed_wikihow_corpus_limit_scopes_clear_existing(tmp_path) -> None:
+    corpus_path = tmp_path / "wikihow_procedures.jsonl"
+    _write_jsonl(
+        corpus_path,
+        [
+            {"id": f"wh_{i:03d}", "title": f"Task {i}", "content": "1. Step"}
+            for i in range(3)
+        ],
+    )
+    memflow = FakeMemFlow(
+        existing=[
+            Procedure(
+                id=f"wh_{i:03d}", title="Old", content="old", user_id="bench-user"
+            )
+            for i in range(3)
+        ]
+    )
+
+    stats = seed_wikihow_corpus(
+        memflow=memflow,
+        user_id="bench-user",
+        corpus_path=corpus_path,
+        clear_existing=True,
+        limit=2,
+    )
+
+    # Only the first two records are cleared and reseeded.
+    assert memflow.store.deleted == ["wh_000", "wh_001"]
+    assert [proc.id for proc in memflow.added] == ["wh_000", "wh_001"]
+    assert stats.num_deleted == 2
+    assert stats.num_seeded == 2
+
+
 def test_seed_wikihow_corpus_resume_progress_prints_overlap(tmp_path, capsys) -> None:
     """--resume-progress prints how many corpus IDs are already in the store."""
     corpus_path = tmp_path / "wikihow_procedures.jsonl"
