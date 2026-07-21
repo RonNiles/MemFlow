@@ -391,7 +391,7 @@ class TestMemMachineStore:
 
         mock_memory.search.return_value = self._search_result(
             self._episode(
-                id="mm-id-1",
+                uid="mm-id-1",
                 content="# Commit Craft\n\nraw skill text",
                 metadata={
                     "mm_type": "procedural",
@@ -424,7 +424,7 @@ class TestMemMachineStore:
 
         mock_memory.search.return_value = self._search_result(
             self._episode(
-                id="mm-skill",
+                uid="mm-skill",
                 content="# Skill\n\ncommit split",
                 metadata={
                     "mm_type": "procedural",
@@ -435,7 +435,7 @@ class TestMemMachineStore:
                 score=0.9,
             ),
             self._episode(
-                id="mm-procedure",
+                uid="mm-procedure",
                 content="# Procedure\n\ncommit split",
                 metadata={
                     "mm_type": "procedural",
@@ -606,7 +606,7 @@ class TestMemMachineStore:
             patch("memflow.store._configure_memmachine_logging") as mock_configure,
         ):
             store = MemMachineStore(enable_logging=True, log_level="debug")
-            store.list_all()
+            store.list()
 
         mock_configure.assert_called_once_with(True, "DEBUG")
 

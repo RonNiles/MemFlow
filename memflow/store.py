@@ -220,11 +220,11 @@ class BaseStore(ABC):
         """
         Stream procedure IDs without materializing full Procedure objects.
 
-        Default falls back to list_all(); MemMachineStore overrides this with
+        Default falls back to list(); MemMachineStore overrides this with
         a paginated v2 list call so resume on very large corpora avoids the
         single-shot ~10k cap on search().
         """
-        for proc in self.list_all(user_id=user_id):
+        for proc in self.list(user_id=user_id):
             if proc.id:
                 yield proc.id
 
@@ -651,7 +651,7 @@ class MemMachineStore(BaseStore):
 
     An in-memory index (procedure.id → MemMachine episode id) is populated as
     a side-effect of add() and search() to allow O(1) delete without a full scan.
-    On a cache-miss in delete(), list_all() is called once to hydrate the index.
+    On a cache-miss in delete(), list() is called once to hydrate the index.
 
     Requires the `memmachine-client` Python package and a running MemMachine server.
     Connection is deferred to first use (lazy initialization).
@@ -933,7 +933,7 @@ class MemMachineStore(BaseStore):
         rows never leave MemMachine. Pagination loops until a page returns no
         episodic_memory entries, dodging the ~10k cap that single-shot search
         hits on large corpora. As a side effect, populates the in-memory
-        ep_id index so a later delete() doesn't need a separate list_all().
+        ep_id index so a later delete() doesn't need a separate list().
         """
         # Import lazily so non-MemMachine paths don't require memmachine_common.
         from memmachine_common.api import MemoryType
