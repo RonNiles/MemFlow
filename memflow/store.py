@@ -772,7 +772,13 @@ class MemMachineStore(BaseStore):
             user_id=meta.get("user_id", "default"),
             category=meta.get("category", "general"),
             tags=tags,
-            kind=meta.get("kind", "skill"),
+            # mm_type is authoritative for these records; older seeds predate the
+            # "kind" metadata key, so fall back to "procedure" for procedural
+            # episodes rather than the generic "skill" default.
+            kind=meta.get(
+                "kind",
+                "procedure" if self._MM_TYPE == "procedural" else "skill",
+            ),
             source_path=source_path,
             metadata=metadata,
             created_at=created_at,
@@ -834,11 +840,23 @@ class MemMachineStore(BaseStore):
         user_id: str | None = None,
         kind: str | None = "skill",
     ) -> list[SearchResult] | list[list[SearchResult]]:
-        """Search using MemMachine semantic search."""
+        """Search using MemMachine semantic search.
+
+        Set MEMMACHINE_USE_FTS=1 (or true/yes/on) to enable hybrid Vector + FTS
+        search on the MemMachine server; defaults off (vector-only).
+        """
+        use_fts = os.getenv("MEMMACHINE_USE_FTS", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
         if isinstance(query, list):
             all_results = []
             for q in query:
-                raw = self._get_memory().search(query=q, limit=top_k * 3)
+                raw = self._get_memory().search(
+                    query=q, limit=top_k * 3, use_fts=use_fts
+                )
                 results = []
                 for item in _extract_episodes(raw):
                     score = float(item.score) if item.score is not None else 0.0
@@ -853,7 +871,9 @@ class MemMachineStore(BaseStore):
                 all_results.append(results[:top_k])
             return all_results
         else:
-            raw = self._get_memory().search(query=query, limit=top_k * 3)
+            raw = self._get_memory().search(
+                query=query, limit=top_k * 3, use_fts=use_fts
+            )
             results = []
             for item in _extract_episodes(raw):
                 score = float(item.score) if item.score is not None else 0.0
